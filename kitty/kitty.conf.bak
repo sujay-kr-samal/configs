@@ -1,0 +1,21 @@
+# --- custom: transparency + cursor trail ---
+
+# transparency (Hyprland blur shows through; change 0.80 to taste, 1.0 = solid)
+background_opacity 0.80
+dynamic_background_opacity yes   # ctrl+shift+a then m / l = more / less opaque
+
+# glowing cursor trail (needs kitty 0.37 or newer)
+cursor_trail 3
+cursor_trail_decay 0.1 0.4
+cursor_trail_start_threshold 2
+cursor_shape beam
+cursor_beam_thickness 1.5
+
+# font + padding
+font_family JetBrainsMono Nerd Font
+font_size 12.0
+window_padding_width 10
+
+# quality of life
+confirm_os_window_close 0
+enable_audio_bell no
