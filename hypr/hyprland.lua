@@ -93,3 +93,12 @@ require("looks")
 require("keybindings")
 require("windows_rule")
 require("autostart")
+
+-- >>> ETEA Shell >>>
+-- Added by ETEA's install.sh. Run it with --uninstall to take this out.
+hl.on("hyprland.start", function()
+    hl.exec_cmd([[qs -p "/home/sujay/.config/etea-shell"]])
+    hl.exec_cmd("wl-paste --watch cliphist store")
+    hl.exec_cmd("hypridle")
+end)
+-- <<< ETEA Shell <<<
