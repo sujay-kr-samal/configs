@@ -69,7 +69,8 @@ hl.bind("XF86AudioPrev",  hl.dsp.exec_cmd("playerctl previous"),   { locked = tr
 --------------------------
 
 -- Tap the Super key to toggle the app launcher
-hl.bind("SUPER + SUPER_L", hl.dsp.exec_cmd("qs ipc call launcher toggle"), { release = true })
+hl.bind(mainMod .. "+ D", hl.dsp.exec_cmd("qs -c lumen ipc call launcher toggle"))
 
--- Super + W opens the wallpaper picker
-hl.bind(mainMod .. " + W", hl.dsp.exec_cmd("qs ipc call wallpapers toggle"))
+-- Open the quick panel and wallpaper picker
+hl.bind(mainMod .. "+ W", hl.dsp.exec_cmd("qs -c lumen ipc call launcher toggleControlCenter"), { release = true })
+
