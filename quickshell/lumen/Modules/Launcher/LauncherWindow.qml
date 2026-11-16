@@ -1,24 +1,24 @@
 
 import QtQuick
 import Quickshell
+import Quickshell.Hyprland
 import Quickshell.Wayland
+import "../.." as Lumen
 
 PanelWindow {
     id: window
 
-    property bool launcherVisible: false
-    property color primaryColor: "#8ce2bf"
-    property color primaryContainerColor: "#29483c"
-    property color backgroundColor: "#0e1514"
-    property color surfaceColor: "#151b19"
-    property color surfaceContainerColor: "#1a2120"
-    property color foregroundColor: "#dde4e2"
-    property color mutedForegroundColor: "#bec9c6"
-    property color outlineColor: "#3f4947"
+    signal closeRequested()
 
-    screen: Quickshell.screens[0]
-    visible: launcherVisible
+    property bool launcherVisible: false
+
+    screen: Quickshell.screens.find(
+        candidate => Hyprland.focusedMonitor
+                     && candidate.name === Hyprland.focusedMonitor.name
+    ) || Quickshell.screens[0]
+    visible: launcherVisible || overlay.opacity > 0.01
     color: "transparent"
+    mask: launcherVisible ? null : emptyInputMask
 
     anchors {
         top: true
@@ -29,51 +29,75 @@ PanelWindow {
 
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: launcherVisible
-                                 ? WlrKeyboardFocus.OnDemand
+                                 ? WlrKeyboardFocus.Exclusive
                                  : WlrKeyboardFocus.None
     WlrLayershell.exclusionMode: ExclusionMode.Ignore
 
     onLauncherVisibleChanged: {
-        console.log("Launcher visibility:", launcherVisible)
         if (launcherVisible) {
-            Qt.callLater(function() {
-                launcher.focusSearch()
-            })
+            focusTimer.restart()
         } else {
+            focusTimer.stop()
             launcher.clearSearchFocus()
         }
     }
 
+    Timer {
+        id: focusTimer
+        interval: 30
+        repeat: false
+
+        onTriggered: {
+            if (window.launcherVisible)
+                launcher.prepareForOpen()
+        }
+    }
+
     Item {
+        id: emptyInputArea
+        width: 0
+        height: 0
+    }
+
+    Region {
+        id: emptyInputMask
+        item: emptyInputArea
+    }
+
+    Item {
+        id: overlay
+        visible: window.launcherVisible || opacity > 0.01
+        enabled: window.launcherVisible
+        opacity: window.launcherVisible ? 1 : 0
         anchors.fill: parent
 
+        Behavior on opacity {
+            NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+        }
         Rectangle {
             anchors.fill: parent
-            color: Qt.rgba(window.backgroundColor.r, window.backgroundColor.g,
-                           window.backgroundColor.b, 0.72)
+            color: Qt.rgba(Lumen.Theme.background.r, Lumen.Theme.background.g,
+                           Lumen.Theme.background.b, 0.72)
 
             MouseArea {
                 anchors.fill: parent
-                onClicked: window.launcherVisible = false
+                onClicked: window.closeRequested()
             }
         }
 
         Launcher {
             id: launcher
-            primaryColor: window.primaryColor
-            primaryContainerColor: window.primaryContainerColor
-            backgroundColor: window.backgroundColor
-            surfaceColor: window.surfaceColor
-            surfaceContainerColor: window.surfaceContainerColor
-            foregroundColor: window.foregroundColor
-            mutedForegroundColor: window.mutedForegroundColor
-            outlineColor: window.outlineColor
+            scale: window.launcherVisible ? 1 : 0.98
 
-            width: Math.min(560, parent.width - 40)
-            height: Math.min(620, parent.height - 48)
+            Behavior on scale {
+                NumberAnimation { duration: 150; easing.type: Easing.OutCubic }
+            }
+
+            width: Math.min(620, parent.width - 36)
+            height: Math.min(640, parent.height - 44)
             anchors.centerIn: parent
 
-            onCloseRequested: window.launcherVisible = false
+            onCloseRequested: window.closeRequested()
         }
     }
 }

@@ -1,11 +1,11 @@
 
 import QtQuick
 import Quickshell.Hyprland
+import "../../.." as Lumen
 
 Item {
     id: root
 
-    property var theme: null
     implicitWidth: workspaceRow.implicitWidth + 24
     implicitHeight: 36
 
@@ -13,11 +13,10 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: height / 2
-        color: root.theme
-               ? Qt.rgba(root.theme.surface.r, root.theme.surface.g,
-                 root.theme.surface.b, 0.88) : "#55202020"
+                color: Qt.rgba(Lumen.Theme.surface.r, Lumen.Theme.surface.g,
+                                             Lumen.Theme.surface.b, 0.88)
         border.width: 1
-        border.color: root.theme ? root.theme.outline : "#30ffffff"
+                border.color: Lumen.Theme.outline
     }
 
     Row {
@@ -32,9 +31,10 @@ Item {
                 id: workspace
 
                 required property var modelData
+                visible: modelData.id > 0
 
-                property bool focused: modelData.focused
                 property bool active: modelData.active
+                property bool focused: modelData.focused
 
                 implicitWidth: focused ? 30 : 11
                 implicitHeight: 11
@@ -54,10 +54,12 @@ Item {
                     radius: height / 2
 
                     color: workspace.focused
-                        ? (root.theme ? root.theme.primary : "#ffffff")
+                        ? Lumen.Theme.primary
                         : workspace.active
-                            ? "#bbbbbb"
-                            : "#66ffffff"
+                            ? Lumen.Theme.tertiary
+                            : Qt.rgba(Lumen.Theme.foreground.r,
+                                      Lumen.Theme.foreground.g,
+                                      Lumen.Theme.foreground.b, 0.4)
 
                     Behavior on color {
                         ColorAnimation { duration: 200 }

@@ -2,14 +2,16 @@ import QtQuick
 import QtQuick.Controls
 import Quickshell
 import Quickshell.Widgets
+import Quickshell.Services.Pipewire
+import Quickshell.Bluetooth
 import Quickshell.Services.SystemTray
 import Quickshell.Services.UPower
+import "../../.." as Lumen
 
 Item {
     id: root
 
     signal openControlCenter()
-    property var theme: null
 
     implicitWidth: rightRow.implicitWidth
     implicitHeight: 38
@@ -33,18 +35,18 @@ Item {
         Rectangle {
             id: systemPill
 
+            property bool hovered: systemMouse.containsMouse
+
             width: systemRow.implicitWidth + 24
             height: 34
             radius: height / 2
-
-                 color: root.theme
-                     ? Qt.rgba(root.theme.surface.r, root.theme.surface.g,
-                         root.theme.surface.b, 0.88) : "#55202020"
+              color: Qt.rgba(Lumen.Theme.surface.r, Lumen.Theme.surface.g,
+                                Lumen.Theme.surface.b, 0.88)
             border.width: 1
-                 border.color: root.theme ? root.theme.outline : "#30ffffff"
+              border.color: Lumen.Theme.outline
 
-            Behavior on color { ColorAnimation { duration: 140 } }
-            Behavior on border.color { ColorAnimation { duration: 140 } }
+              Behavior on color { ColorAnimation { duration: 140 } }
+              Behavior on border.color { ColorAnimation { duration: 140 } }
 
             Row {
                 id: systemRow
@@ -54,12 +56,14 @@ Item {
 
                 // Wi-Fi
                 Image {
+                    id: wifiStatusIcon
                     width: 17
                     height: 17
                     anchors.verticalCenter: parent.verticalCenter
                     source: root.iconPath("wifi")
                     fillMode: Image.PreserveAspectFit
                     smooth: true
+                    opacity: Lumen.ControlCenterState.wifiEnabled ? 1 : 0.4
                 }
 
                 // Bluetooth
@@ -70,6 +74,8 @@ Item {
                     source: root.iconPath("bluetooth")
                     fillMode: Image.PreserveAspectFit
                     smooth: true
+                    opacity: Bluetooth.defaultAdapter && Bluetooth.defaultAdapter.enabled
+                        ? 1 : 0.4
                 }
 
                 // Speaker
@@ -77,7 +83,12 @@ Item {
                     width: 17
                     height: 17
                     anchors.verticalCenter: parent.verticalCenter
-                    source: root.iconPath("volume-2")
+                    source: !Pipewire.defaultAudioSink
+                              || !Pipewire.defaultAudioSink.audio
+                              || Pipewire.defaultAudioSink.audio.muted
+                              || Pipewire.defaultAudioSink.audio.volume < 0.01
+                        ? root.iconPath("volume-x")
+                        : root.iconPath("volume-2")
                     fillMode: Image.PreserveAspectFit
                     smooth: true
                 }
@@ -90,10 +101,15 @@ Item {
                     source: root.iconPath("mic")
                     fillMode: Image.PreserveAspectFit
                     smooth: true
+                    opacity: !Pipewire.defaultAudioSource
+                             || !Pipewire.defaultAudioSource.audio
+                             || Pipewire.defaultAudioSource.audio.muted
+                        ? 0.4 : 1
                 }
 
                 // Battery
                 Row {
+                    visible: UPower.displayDevice.isPresent
                     anchors.verticalCenter: parent.verticalCenter
                     spacing: 4
 
@@ -126,7 +142,7 @@ Item {
                             ? Math.round(UPower.displayDevice.percentage * 100) + "%"
                             : "--%"
 
-                        color: "#ffffff"
+                        color: Lumen.Theme.foreground
                         font.pixelSize: 11
                     }
                 }
@@ -145,21 +161,18 @@ Item {
             MouseArea {
                 id: systemMouse
                 anchors.fill: parent
-                hoverEnabled: true
+                acceptedButtons: Qt.LeftButton
                 cursorShape: Qt.PointingHandCursor
-
                 onClicked: root.openControlCenter()
             }
 
             states: State {
-                when: systemMouse.containsMouse
+                when: systemPill.hovered
                 PropertyChanges {
-                    systemPill.color: root.theme
-                        ? Qt.rgba(root.theme.surfaceContainer.r,
-                                  root.theme.surfaceContainer.g,
-                                  root.theme.surfaceContainer.b, 0.95)
-                        : "#78323a35"
-                    systemPill.border.color: root.theme ? root.theme.primary : "#558ce2bf"
+                    systemPill.color: Qt.rgba(Lumen.Theme.surfaceContainer.r,
+                                              Lumen.Theme.surfaceContainer.g,
+                                              Lumen.Theme.surfaceContainer.b, 0.95)
+                    systemPill.border.color: Lumen.Theme.primary
                 }
             }
         }
@@ -168,20 +181,22 @@ Item {
         // RUNNING APPLICATIONS PILL
         // ==================================
 
-        Rectangle {
+        Pill {
             id: appsPill
 
+            clickable: true
             visible: trayRepeater.count > 0
+
+            onClicked: root.openControlCenter()
 
             width: visible ? appsRow.implicitWidth + 20 : 0
             height: 34
             radius: height / 2
 
-                 color: root.theme
-                     ? Qt.rgba(root.theme.surface.r, root.theme.surface.g,
-                         root.theme.surface.b, 0.88) : "#55202020"
+                 color: Qt.rgba(Lumen.Theme.surface.r, Lumen.Theme.surface.g,
+                                Lumen.Theme.surface.b, 0.88)
             border.width: 1
-                 border.color: root.theme ? root.theme.outline : "#30ffffff"
+                 border.color: Lumen.Theme.outline
 
             Row {
                 id: appsRow
@@ -216,19 +231,36 @@ Item {
 
                             anchors.fill: parent
                             hoverEnabled: true
+                            acceptedButtons: Qt.LeftButton | Qt.RightButton
 
                             cursorShape: Qt.PointingHandCursor
 
-                            onClicked: {
-                                trayItem.modelData.activate()
+                            onClicked: function(mouse) {
+                                if (mouse.button === Qt.RightButton ||
+                                    trayItem.modelData.onlyMenu) {
+                                    if (trayItem.modelData.hasMenu)
+                                        trayMenu.open()
+                                } else {
+                                    trayItem.modelData.activate()
+                                }
                             }
+                        }
+
+                        QsMenuAnchor {
+                            id: trayMenu
+                            menu: trayItem.modelData.menu
+                            anchor.item: trayItem
                         }
 
                         Rectangle {
                             anchors.fill: parent
                             z: -1
                             radius: 5
-                            color: trayMouse.containsMouse ? "#33413d" : "transparent"
+                            color: trayMouse.containsMouse
+                                ? Qt.rgba(Lumen.Theme.primary.r,
+                                          Lumen.Theme.primary.g,
+                                          Lumen.Theme.primary.b, 0.18)
+                                : "transparent"
                             Behavior on color { ColorAnimation { duration: 120 } }
                         }
 

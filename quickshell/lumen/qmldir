@@ -1,0 +1,3 @@
+module Lumen
+singleton Theme 1.0 Theme.qml
+singleton ControlCenterState 1.0 ControlCenterState.qml

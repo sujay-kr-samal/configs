@@ -5,6 +5,9 @@ import QtQml
 import Qt.labs.folderlistmodel
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Pipewire
+import Quickshell.Bluetooth
+import "../.." as Lumen
 
 Item {
     id: root
@@ -12,24 +15,48 @@ Item {
     signal closeRequested()
     signal wallpaperApplied()
 
-    property var theme: null
     property string wallpaperDirectory:
         Quickshell.env("HOME") + "/Pictures/Wallpapers"
     property string currentWallpaper: ""
     property string wallpaperMessage: "Choose a wallpaper"
-    property bool wifiEnabled: false
-    property bool bluetoothEnabled: false
-    property bool dndEnabled: false
-    property bool keepDisplayOn: false
+    property bool wifiEnabled: Lumen.ControlCenterState.wifiEnabled
+    property string wifiName: Lumen.ControlCenterState.wifiName
+    property bool bluetoothEnabled: Bluetooth.defaultAdapter
+        ? Bluetooth.defaultAdapter.enabled : false
+    property string bluetoothName: {
+        if (!Bluetooth.defaultAdapter)
+            return "No device connected"
+        const devices = Bluetooth.defaultAdapter.devices.values || []
+        const connected = devices.find(device => device.connected)
+        return connected ? connected.name : "No device connected"
+    }
+    property bool sliderDragging: false
+    property string pendingLevelKey: ""
+    property real pendingLevel: 0
+    property string powerActionPending: ""
 
-    property string wifiName: "Checking..."
-    property string bluetoothName: "No device connected"
+    focus: true
+
+    Keys.onEscapePressed: function(event) {
+        event.accepted = true
+        root.closeRequested()
+    }
+
+    onVisibleChanged: {
+        if (visible)
+            forceActiveFocus()
+    }
 
     property real brightness: 41
-    property real speaker: 17
-    property real microphone: 100
+    property real speaker: Pipewire.defaultAudioSink
+        && Pipewire.defaultAudioSink.audio
+        ? Pipewire.defaultAudioSink.audio.volume * 100 : 0
+    property real microphone: Pipewire.defaultAudioSource
+        && Pipewire.defaultAudioSource.audio
+        ? Pipewire.defaultAudioSource.audio.volume * 100 : 0
 
-    property int notificationCount: 0
+    property int notificationCount:
+        (Lumen.ControlCenterState.notifications.values || []).length
 
     // ---------------------------------------------------------
     // COMMAND HELPERS
@@ -45,7 +72,7 @@ Item {
 
         wallpaperMessage = "Applying wallpaper and colors..."
         wallpaperProcess.command = [
-            "sh",
+            "bash",
             Quickshell.env("HOME") + "/.config/quickshell/set-wallpaper.sh",
             path
         ]
@@ -58,80 +85,71 @@ Item {
     }
 
     function refreshAll() {
-        refreshProcess(wifiStatus)
-        refreshProcess(wifiNameStatus)
-        refreshProcess(bluetoothStatus)
-        refreshProcess(bluetoothDeviceStatus)
         refreshProcess(brightnessStatus)
-        refreshProcess(speakerStatus)
-        refreshProcess(microphoneStatus)
-        refreshProcess(dndStatus)
-        refreshProcess(notificationStatus)
     }
 
     function setLevel(key, value) {
-        value = Math.round(Math.max(0, Math.min(100, value)))
+        value = Math.round(Math.max(key === "brightness" ? 5 : 0,
+                                    Math.min(100, value)))
 
         if (key === "brightness") {
             brightness = value
-            runCommand([
-                "brightnessctl",
-                "set", value + "%"
-            ])
         } else if (key === "speaker") {
-            speaker = value
-            runCommand([
-                "wpctl",
-                "set-volume",
-                "@DEFAULT_AUDIO_SINK@",
-                (value / 100).toFixed(2)
-            ])
+            if (Pipewire.defaultAudioSink && Pipewire.defaultAudioSink.audio)
+                Pipewire.defaultAudioSink.audio.volume = value / 100
+            return
         } else {
-            microphone = value
-            runCommand([
-                "wpctl",
-                "set-volume",
-                "@DEFAULT_AUDIO_SOURCE@",
-                (value / 100).toFixed(2)
-            ])
+            if (Pipewire.defaultAudioSource && Pipewire.defaultAudioSource.audio)
+                Pipewire.defaultAudioSource.audio.volume = value / 100
+            return
+        }
+
+        pendingLevelKey = key
+        pendingLevel = value
+        if (!levelApplyTimer.running)
+            levelApplyTimer.start()
+    }
+
+    function applyPendingLevel() {
+        if (pendingLevelKey === "brightness") {
+            runCommand(["brightnessctl", "set", pendingLevel + "%"])
+        }
+    }
+
+    function flushPendingLevel() {
+        if (pendingLevelKey === "brightness") {
+            levelApplyTimer.stop()
+            applyPendingLevel()
         }
     }
 
     function toggleWifi() {
-        wifiEnabled = !wifiEnabled
-        runCommand([
-            "nmcli",
-            "radio",
-            "wifi",
-            wifiEnabled ? "on" : "off"
-        ])
-        refreshProcess(wifiStatus)
+        Lumen.ControlCenterState.toggleWifi()
     }
 
     function toggleBluetooth() {
-        bluetoothEnabled = !bluetoothEnabled
-        runCommand([
-            "bluetoothctl",
-            "power",
-            bluetoothEnabled ? "on" : "off"
-        ])
-        refreshProcess(bluetoothStatus)
+        if (Bluetooth.defaultAdapter)
+            Bluetooth.defaultAdapter.enabled = !Bluetooth.defaultAdapter.enabled
     }
 
     function toggleDnd() {
-        dndEnabled = !dndEnabled
-        runCommand([
-            "dunstctl",
-            "set-paused",
-            dndEnabled ? "true" : "false"
-        ])
+        Lumen.ControlCenterState.toggleDnd()
     }
 
     function toggleDisplay() {
-        keepDisplayOn = !keepDisplayOn
+        Lumen.ControlCenterState.keepDisplayOn =
+            !Lumen.ControlCenterState.keepDisplayOn
     }
 
     function powerAction(action) {
+        if (powerActionPending !== action) {
+            powerActionPending = action
+            powerConfirmTimer.restart()
+            return
+        }
+
+        powerConfirmTimer.stop()
+        powerActionPending = ""
         if (action === "Logout")
             runCommand(["hyprctl", "dispatch", "exit"])
         else if (action === "Restart")
@@ -141,10 +159,7 @@ Item {
     }
 
     function clearNotifications() {
-        runCommand(["dunstctl", "close-all"])
-        runCommand(["dunstctl", "history-clear"])
-        notificationCount = 0
-        refreshProcess(notificationStatus)
+        Lumen.ControlCenterState.dismissAllNotifications()
     }
 
     // ---------------------------------------------------------
@@ -154,7 +169,8 @@ Item {
     FolderListModel {
         id: wallpaperFiles
         folder: "file://" + root.wallpaperDirectory
-        nameFilters: ["*.jpg", "*.jpeg", "*.png", "*.webp", "*.JPG", "*.PNG"]
+        nameFilters: ["*.jpg", "*.jpeg", "*.png", "*.webp"]
+        caseSensitive: false
         showDirs: false
         sortField: FolderListModel.Name
     }
@@ -184,80 +200,6 @@ Item {
     }
 
     Process {
-        id: wifiStatus
-        command: ["nmcli", "-t", "-f", "WIFI", "general"]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                root.wifiEnabled = text.trim() === "enabled"
-            }
-        }
-    }
-
-    Process {
-        id: wifiNameStatus
-        command: [
-            "nmcli", "-t",
-            "-f", "NAME",
-            "connection", "show", "--active"
-        ]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                let lines = text.trim().split("\n")
-                let name = ""
-
-                for (let i = 0; i < lines.length; i++) {
-                    let entry = lines[i].trim()
-
-                    if (entry && entry !== "lo") {
-                        name = entry
-                        break
-                    }
-                }
-
-                root.wifiName = name || "Not connected"
-            }
-        }
-    }
-
-    Process {
-        id: bluetoothStatus
-        command: ["bluetoothctl", "show"]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                root.bluetoothEnabled =
-                    text.indexOf("Powered: yes") !== -1
-            }
-        }
-    }
-
-    Process {
-        id: bluetoothDeviceStatus
-        command: ["bluetoothctl", "devices", "Connected"]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                let lines = text.trim().split("\n")
-                let name = "No device connected"
-
-                if (lines.length > 0 &&
-                    lines[0].trim().startsWith("Device ")) {
-                    let parts = lines[0].trim().split(" ")
-                    name = parts.slice(2).join(" ") || "Connected device"
-                }
-
-                root.bluetoothName = name
-            }
-        }
-    }
-
-    Process {
         id: brightnessStatus
         command: ["brightnessctl", "-m"]
         running: false
@@ -269,94 +211,35 @@ Item {
                 if (parts.length >= 4) {
                     let value = parseFloat(parts[3].replace("%", ""))
 
-                    if (!isNaN(value))
-                        root.brightness = value
+                    if (!isNaN(value) && !root.sliderDragging)
+                        root.brightness = Math.max(5, value)
                 }
             }
         }
     }
 
-    Process {
-        id: speakerStatus
-        command: ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                let match = text.match(/Volume:\s*([0-9.]+)/)
-
-                if (match)
-                    root.speaker = Math.min(100, parseFloat(match[1]) * 100)
-            }
-        }
+    Timer {
+        id: levelApplyTimer
+        interval: 50
+        repeat: false
+        onTriggered: root.applyPendingLevel()
     }
 
-    Process {
-        id: microphoneStatus
-        command: ["wpctl", "get-volume", "@DEFAULT_AUDIO_SOURCE@"]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                let match = text.match(/Volume:\s*([0-9.]+)/)
-
-                if (match)
-                    root.microphone = Math.min(100, parseFloat(match[1]) * 100)
-            }
-        }
-    }
-
-    Process {
-        id: dndStatus
-        command: ["dunstctl", "is-paused"]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                root.dndEnabled = text.trim() === "true"
-            }
-        }
-    }
-
-    Process {
-        id: notificationStatus
-        command: ["dunstctl", "count", "displayed"]
-        running: false
-
-        stdout: StdioCollector {
-            onStreamFinished: {
-                let count = parseInt(text.trim())
-                root.notificationCount = isNaN(count) ? 0 : count
-            }
-        }
-    }
-
-    // Keep display inhibitor
-    Process {
-        id: displayInhibitor
-
-        command: [
-            "systemd-inhibit",
-            "--what=idle:sleep",
-            "--mode=block",
-            "--why=Lumen Keep Display On",
-            "sleep",
-            "infinity"
-        ]
-
-        running: root.keepDisplayOn
+    Timer {
+        id: powerConfirmTimer
+        interval: 2500
+        repeat: false
+        onTriggered: root.powerActionPending = ""
     }
 
     Timer {
         interval: 3000
         repeat: true
-        running: true
+        running: root.visible
         triggeredOnStart: true
 
         onTriggered: root.refreshAll()
     }
-
-    Component.onCompleted: refreshAll()
 
     // ---------------------------------------------------------
     // MAIN PANEL
@@ -365,10 +248,9 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: 30
-        color: root.theme
-               ? Qt.rgba(root.theme.surface.r, root.theme.surface.g,
-                 root.theme.surface.b, 0.97) : "#b8191a20"
-        border.color: root.theme ? root.theme.outline : "#35ffffff"
+                color: Qt.rgba(Lumen.Theme.surface.r, Lumen.Theme.surface.g,
+                                             Lumen.Theme.surface.b, 0.97)
+                border.color: Lumen.Theme.outline
         border.width: 1
         clip: true
 
@@ -398,13 +280,13 @@ Item {
                         width: 34
                         height: 4
                         radius: 2
-                        color: "#555761"
+                        color: Lumen.Theme.outline
                         anchors.horizontalCenter: parent.horizontalCenter
                     }
 
                     Text {
                         text: "Quick panel"
-                        color: root.theme ? root.theme.foreground : "#f4f3f8"
+                        color: Lumen.Theme.foreground
                         font.pixelSize: 23
                         font.weight: Font.Medium
                     }
@@ -423,8 +305,8 @@ Item {
                         height: 70
                         radius: 24
                            color: root.wifiEnabled
-                               ? (root.theme ? root.theme.primaryContainer : "#bcebd3")
-                               : (root.theme ? root.theme.surfaceContainer : "#66363845")
+                               ? Lumen.Theme.primaryContainer
+                               : Lumen.Theme.surfaceContainer
 
                         Row {
                             anchors.fill: parent
@@ -437,49 +319,44 @@ Item {
                                 height: 42
                                 radius: 21
                                     color: root.wifiEnabled
-                                        ? (root.theme ? root.theme.primary : "#86d5ac")
-                                        : (root.theme ? root.theme.background : "#424b46")
+                                        ? Lumen.Theme.primary
+                                        : Lumen.Theme.background
                                 anchors.verticalCenter: parent.verticalCenter
 
-                                Image {
+                                Icon {
                                     anchors.centerIn: parent
                                     width: 21
                                     height: 21
                                     source: Qt.resolvedUrl("../../assets/icons/wifi.svg")
-                                    sourceSize: Qt.size(21, 21)
+                                    tint: root.wifiEnabled
+                                        ? Lumen.Theme.primaryText
+                                        : Lumen.Theme.foreground
                                 }
                             }
 
                             Column {
                                 anchors.verticalCenter: parent.verticalCenter
                                 spacing: 4
-                                width: parent.width - 105
+                                width: parent.width - 68
 
                                 Text {
                                     text: "Wi-Fi"
                                      color: root.wifiEnabled
-                                         ? (root.theme ? root.theme.foreground : "#20352b")
-                                         : (root.theme ? root.theme.foreground : "#f1f0f5")
+                                         ? Lumen.Theme.primaryContainerText
+                                         : Lumen.Theme.foreground
                                     font.pixelSize: 14
                                     font.weight: Font.DemiBold
                                 }
 
                                 Text {
                                     text: root.wifiEnabled ? root.wifiName : "Off"
-                                     color: root.theme
-                                         ? root.theme.mutedForeground : "#a4ada7"
+                                     color: Lumen.Theme.mutedForeground
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
                                     width: parent.width
                                 }
                             }
 
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: "›"
-                                color: root.theme ? root.theme.primary : "#2b533f"
-                                font.pixelSize: 24
-                            }
                         }
 
                         MouseArea {
@@ -495,8 +372,8 @@ Item {
                         height: 70
                         radius: 24
                            color: root.bluetoothEnabled
-                               ? (root.theme ? root.theme.primaryContainer : "#bcebd3")
-                               : (root.theme ? root.theme.surfaceContainer : "#66363845")
+                               ? Lumen.Theme.primaryContainer
+                               : Lumen.Theme.surfaceContainer
 
                         Row {
                             anchors.fill: parent
@@ -509,48 +386,42 @@ Item {
                                 height: 42
                                 radius: 21
                                     color: root.bluetoothEnabled
-                                        ? (root.theme ? root.theme.primary : "#86d5ac")
-                                        : (root.theme ? root.theme.background : "#424b46")
+                                        ? Lumen.Theme.primary
+                                        : Lumen.Theme.background
                                 anchors.verticalCenter: parent.verticalCenter
 
-                                Image {
+                                Icon {
                                     anchors.centerIn: parent
                                     width: 21
                                     height: 21
                                     source: Qt.resolvedUrl("../../assets/icons/bluetooth.svg")
-                                    sourceSize: Qt.size(21, 21)
+                                    tint: root.bluetoothEnabled
+                                        ? Lumen.Theme.primaryText
+                                        : Lumen.Theme.foreground
                                 }
                             }
 
                             Column {
                                 anchors.verticalCenter: parent.verticalCenter
                                 spacing: 4
-                                width: parent.width - 105
+                                width: parent.width - 68
 
                                 Text {
                                     text: "Bluetooth"
-                                     color: root.theme
-                                         ? root.theme.foreground : "#f1f0f5"
+                                     color: Lumen.Theme.foreground
                                     font.pixelSize: 14
                                     font.weight: Font.DemiBold
                                 }
 
                                 Text {
                                     text: root.bluetoothEnabled ? root.bluetoothName : "Off"
-                                     color: root.theme
-                                         ? root.theme.mutedForeground : "#a4ada7"
+                                     color: Lumen.Theme.mutedForeground
                                     font.pixelSize: 11
                                     elide: Text.ElideRight
                                     width: parent.width
                                 }
                             }
 
-                            Text {
-                                anchors.verticalCenter: parent.verticalCenter
-                                text: "›"
-                                color: root.theme ? root.theme.primary : "#2b533f"
-                                font.pixelSize: 24
-                            }
                         }
 
                         MouseArea {
@@ -574,7 +445,7 @@ Item {
 
                             Text {
                                 text: "Wallpaper"
-                                color: root.theme ? root.theme.foreground : "#f1f0f5"
+                                color: Lumen.Theme.foreground
                                 font.pixelSize: 14
                                 font.weight: Font.DemiBold
                             }
@@ -582,8 +453,7 @@ Item {
                             Text {
                                 width: parent.width
                                 text: root.wallpaperMessage
-                                color: root.theme
-                                      ? root.theme.mutedForeground : "#a4a3af"
+                                  color: Lumen.Theme.mutedForeground
                                 font.pixelSize: 10
                                 elide: Text.ElideRight
                             }
@@ -593,8 +463,7 @@ Item {
                             id: wallpaperCount
                             width: implicitWidth
                             text: wallpaperFiles.count + " images"
-                            color: root.theme
-                                   ? root.theme.mutedForeground : "#a4a3af"
+                            color: Lumen.Theme.mutedForeground
                             font.pixelSize: 10
                             anchors.verticalCenter: parent.verticalCenter
                         }
@@ -620,21 +489,21 @@ Item {
                                 anchors.margins: 3
                                 radius: 11
                                 clip: true
-                                color: root.theme
-                                       ? root.theme.surfaceContainer : "#252b2d"
+                                    color: Lumen.Theme.surfaceContainer
                                 border.width: root.wallpaperDirectory + "/"
                                               + wallpaperTile.wallpaperName
                                               === root.currentWallpaper ? 2 : 1
                                 border.color: root.wallpaperDirectory + "/"
                                               + wallpaperTile.wallpaperName
                                               === root.currentWallpaper
-                                    ? (root.theme ? root.theme.primary : "#8ce2bf")
-                                    : (root.theme ? root.theme.outline : "#35ffffff")
+                                    ? Lumen.Theme.primary
+                                    : Lumen.Theme.outline
 
                                 Image {
                                     anchors.fill: parent
                                     source: "file://" + root.wallpaperDirectory + "/"
                                             + wallpaperTile.wallpaperName
+                                    sourceSize: Qt.size(240, 160)
                                     fillMode: Image.PreserveAspectCrop
                                     asynchronous: true
                                     cache: true
@@ -662,7 +531,9 @@ Item {
                     width: parent.width
                     height: 202
                     radius: 10
-                    color: "#552b2d38"
+                    color: Qt.rgba(Lumen.Theme.surfaceContainerHigh.r,
+                                   Lumen.Theme.surfaceContainerHigh.g,
+                                   Lumen.Theme.surfaceContainerHigh.b, 0.85)
 
                     Row {
                         anchors.fill: parent
@@ -676,152 +547,21 @@ Item {
                                 { name: "Mic", icon: "mic", key: "mic" }
                             ]
 
-                            delegate: Item {
-                                id: sliderItem
-
+                            delegate: VerticalSlider {
                                 required property var modelData
-
                                 width: (parent.width - 24) / 3
                                 height: parent.height
-
-                                property real level:
-                                    modelData.key === "brightness" ? root.brightness :
-                                    modelData.key === "speaker" ? root.speaker :
-                                    root.microphone
-
-                                Column {
-                                    anchors.fill: parent
-                                    spacing: 7
-
-                                    Rectangle {
-                                        width: 34
-                                        height: 34
-                                        radius: 17
-                                        color: "#554b4d59"
-                                        anchors.horizontalCenter: parent.horizontalCenter
-
-                                        Image {
-                                            anchors.centerIn: parent
-                                            width: 17
-                                            height: 17
-                                            source: Qt.resolvedUrl("../../assets/icons/" + sliderItem.modelData.icon + ".svg")
-                                            sourceSize: Qt.size(17, 17)
-                                        }
-                                    }
-
-                                    Text {
-                                        width: parent.width
-                                        text: sliderItem.modelData.name
-                                        color: "#c1c0ca"
-                                        font.pixelSize: 10
-                                        horizontalAlignment: Text.AlignHCenter
-                                    }
-
-                                    // Slider touch area
-                                    Item {
-                                        id: sliderArea
-
-                                        width: parent.width
-                                        height: 112
-
-                                        // Rounded track
-                                        Rectangle {
-                                            id: sliderTrack
-
-                                            width: 43
-                                            height: 108
-                                            radius: 10
-                                            anchors.centerIn: parent
-
-                                            color: "#554b4d59"
-
-                                            // Prevent fill from escaping the track
-                                            clip: true
-
-                                            Rectangle {
-                                                id: sliderFill
-
-                                                width: parent.width
-                                                height: Math.max(
-                                                    0,
-                                                    Math.min(
-                                                        parent.height,
-                                                        parent.height * sliderItem.level / 100
-                                                    )
-                                                )
-
-                                                anchors.bottom: parent.bottom
-
-                                                radius: 10
-
-                                                      color: root.theme
-                                                          ? root.theme.primary : "#8ce2bf"
-
-                                                Behavior on height {
-                                                    NumberAnimation {
-                                                        duration: 100
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        Text {
-                                            anchors.top: sliderTrack.bottom
-                                            anchors.topMargin: 8
-                                            anchors.horizontalCenter: sliderTrack.horizontalCenter
-
-                                            text: Math.round(sliderItem.level) + "%"
-                                            color: "#ffffff"
-                                            font.pixelSize: 12
-                                            font.weight: Font.DemiBold
-                                        }
-
-                                        // Drag handler
-                                        MouseArea {
-                                            id: sliderMouse
-
-                                            anchors.fill: parent
-
-                                            acceptedButtons: Qt.LeftButton
-
-                                            // Prevent parent Flickable from
-                                            // stealing the slider drag.
-                                            preventStealing: true
-
-                                            function updateSlider(mouse) {
-                                                let point = mapToItem(
-                                                    sliderTrack,
-                                                    mouse.x,
-                                                    mouse.y
-                                                )
-
-                                                let y = Math.max(
-                                                    0,
-                                                    Math.min(
-                                                        sliderTrack.height,
-                                                        point.y
-                                                    )
-                                                )
-
-                                                let newValue =
-                                                    100 * (1 - y / sliderTrack.height)
-
-                                                root.setLevel(
-                                                    sliderItem.modelData.key,
-                                                    newValue
-                                                )
-                                            }
-
-                                            onPressed: function(mouse) {
-                                                updateSlider(mouse)
-                                            }
-
-                                            onPositionChanged: function(mouse) {
-                                                if (pressed)
-                                                    updateSlider(mouse)
-                                            }
-                                        }
-                                    }
+                                label: modelData.name
+                                iconName: modelData.icon
+                                value: modelData.key === "brightness" ? root.brightness
+                                    : modelData.key === "speaker" ? root.speaker
+                                    : root.microphone
+                                minimumValue: modelData.key === "brightness" ? 5 : 0
+                                onValueEdited: value => root.setLevel(modelData.key, value)
+                                onDragStarted: root.sliderDragging = true
+                                onDragFinished: {
+                                    root.flushPendingLevel()
+                                    root.sliderDragging = false
                                 }
                             }
                         }
@@ -834,72 +574,20 @@ Item {
                     width: parent.width
                     spacing: 10
 
-                    Rectangle {
+                    ToggleTile {
                         width: (parent.width - 10) / 2
-                        height: 62
-                        radius: 20
-                           color: root.dndEnabled
-                               ? (root.theme ? root.theme.primaryContainer : "#bcebd3")
-                               : (root.theme ? root.theme.surfaceContainer : "#66363845")
-
-                        Row {
-                            anchors.centerIn: parent
-                            spacing: 9
-
-                            Image {
-                                width: 19
-                                height: 19
-                                anchors.verticalCenter: parent.verticalCenter
-                                source: Qt.resolvedUrl("../../assets/icons/moon.svg")
-                                sourceSize: Qt.size(19, 19)
-                            }
-
-                            Text {
-                                text: "Do not disturb"
-                                color: root.theme ? root.theme.foreground : "#eeeeF4"
-                                font.pixelSize: 11
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: root.toggleDnd()
-                        }
+                        title: "Do not disturb"
+                        iconSource: Qt.resolvedUrl("../../assets/icons/moon.svg")
+                        checked: Lumen.ControlCenterState.dndEnabled
+                        onClicked: root.toggleDnd()
                     }
 
-                    Rectangle {
+                    ToggleTile {
                         width: (parent.width - 10) / 2
-                        height: 62
-                        radius: 20
-                           color: root.keepDisplayOn
-                               ? (root.theme ? root.theme.primaryContainer : "#bcebd3")
-                               : (root.theme ? root.theme.surfaceContainer : "#66363845")
-
-                        Row {
-                            anchors.centerIn: parent
-                            spacing: 9
-
-                            Image {
-                                width: 19
-                                height: 19
-                                anchors.verticalCenter: parent.verticalCenter
-                                source: Qt.resolvedUrl("../../assets/icons/coffee.svg")
-                                sourceSize: Qt.size(19, 19)
-                            }
-
-                            Text {
-                                text: "Keep display on"
-                                color: root.theme ? root.theme.foreground : "#eeeeF4"
-                                font.pixelSize: 11
-                                anchors.verticalCenter: parent.verticalCenter
-                            }
-                        }
-
-                        MouseArea {
-                            anchors.fill: parent
-                            onClicked: root.toggleDisplay()
-                        }
+                        title: "Keep display on"
+                        iconSource: Qt.resolvedUrl("../../assets/icons/coffee.svg")
+                        checked: Lumen.ControlCenterState.keepDisplayOn
+                        onClicked: root.toggleDisplay()
                     }
                 }
 
@@ -911,7 +599,7 @@ Item {
 
                     Text {
                         text: "POWER"
-                        color: "#858590"
+                        color: Lumen.Theme.mutedForeground
                         font.pixelSize: 10
                         font.letterSpacing: 1.5
                     }
@@ -933,23 +621,23 @@ Item {
                                 width: (parent.width - 18) / 3
                                 height: 64
                                 radius: 19
-                                color: "#66363845"
+                                color: Lumen.Theme.surfaceContainer
 
                                 Column {
                                     anchors.centerIn: parent
                                     spacing: 6
 
-                                    Image {
+                                    Icon {
                                         width: 19
                                         height: 19
                                         anchors.horizontalCenter: parent.horizontalCenter
                                         source: Qt.resolvedUrl("../../assets/icons/" + modelData.icon + ".svg")
-                                        sourceSize: Qt.size(19, 19)
                                     }
 
                                     Text {
-                                        text: modelData.name
-                                        color: "#eeeeF4"
+                                        text: root.powerActionPending === modelData.name
+                                            ? "Confirm?" : modelData.name
+                                        color: Lumen.Theme.foreground
                                         font.pixelSize: 10
                                         anchors.horizontalCenter: parent.horizontalCenter
                                     }
@@ -978,7 +666,7 @@ Item {
                             text: root.notificationCount > 0
                                   ? "Notifications (" + root.notificationCount + ")"
                                   : "Notifications"
-                            color: "#f1f0f5"
+                            color: Lumen.Theme.foreground
                             font.pixelSize: 15
                             font.weight: Font.DemiBold
                             anchors.left: parent.left
@@ -989,14 +677,14 @@ Item {
                             width: 68
                             height: 32
                             radius: 16
-                            color: "#55444855"
+                            color: Lumen.Theme.surfaceContainerHigh
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
 
                             Text {
                                 anchors.centerIn: parent
                                 text: "Clear all"
-                                color: "#ffffff"
+                                color: Lumen.Theme.foreground
                                 font.pixelSize: 11
                                 font.weight: Font.Medium
                             }
@@ -1008,33 +696,88 @@ Item {
                         }
                     }
 
-                    Rectangle {
+                    ListView {
                         width: parent.width
-                        height: 76
-                        radius: 20
-                        color: "#552b2d38"
+                        height: Math.min(Math.max(contentHeight, 76), 210)
+                        implicitHeight: 76
+                        clip: true
+                        spacing: 7
+                        model: Lumen.ControlCenterState.notifications
 
-                        Column {
+                        delegate: Rectangle {
+                            id: notificationRow
+                            required property var modelData
+                            width: ListView.view.width
+                            height: 68
+                            radius: 12
+                            color: Lumen.Theme.surfaceContainerHigh
+
+                            Column {
+                                anchors.left: parent.left
+                                anchors.leftMargin: 12
+                                anchors.right: dismissButton.left
+                                anchors.rightMargin: 8
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 3
+
+                                Text {
+                                    width: parent.width
+                                    text: notificationRow.modelData.appName
+                                        ? notificationRow.modelData.appName + " · "
+                                          + notificationRow.modelData.summary
+                                        : notificationRow.modelData.summary
+                                    color: Lumen.Theme.foreground
+                                    font.pixelSize: 12
+                                    font.weight: Font.DemiBold
+                                    elide: Text.ElideRight
+                                }
+
+                                Text {
+                                    width: parent.width
+                                    text: notificationRow.modelData.body
+                                    color: Lumen.Theme.mutedForeground
+                                    font.pixelSize: 10
+                                    elide: Text.ElideRight
+                                }
+                            }
+
+                            Rectangle {
+                                id: dismissButton
+                                anchors.right: parent.right
+                                anchors.rightMargin: 7
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 30
+                                height: 30
+                                radius: 8
+                                color: dismissMouse.containsMouse
+                                    ? Qt.rgba(Lumen.Theme.foreground.r,
+                                              Lumen.Theme.foreground.g,
+                                              Lumen.Theme.foreground.b, 0.1)
+                                    : "transparent"
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: "×"
+                                    color: Lumen.Theme.mutedForeground
+                                    font.pixelSize: 17
+                                }
+
+                                MouseArea {
+                                    id: dismissMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: Qt.PointingHandCursor
+                                    onClicked: notificationRow.modelData.dismiss()
+                                }
+                            }
+                        }
+
+                        Text {
                             anchors.centerIn: parent
-                            spacing: 5
-
-                            Text {
-                                text: root.notificationCount > 0
-                                      ? root.notificationCount + " notification(s) active"
-                                      : "No notifications"
-                                color: "#d4d3dc"
-                                font.pixelSize: 12
-                                anchors.horizontalCenter: parent.horizontalCenter
-                            }
-
-                            Text {
-                                text: root.notificationCount > 0
-                                      ? "Use Clear all to dismiss"
-                                      : "You're all caught up"
-                                color: "#858590"
-                                font.pixelSize: 10
-                                anchors.horizontalCenter: parent.horizontalCenter
-                            }
+                            visible: root.notificationCount === 0
+                            text: "You're all caught up"
+                            color: Lumen.Theme.mutedForeground
+                            font.pixelSize: 12
                         }
                     }
                 }
@@ -1042,7 +785,7 @@ Item {
                 Text {
                     width: parent.width
                     text: "LUMEN"
-                    color: "#686a76"
+                    color: Lumen.Theme.outline
                     font.pixelSize: 9
                     font.letterSpacing: 3
                     horizontalAlignment: Text.AlignHCenter

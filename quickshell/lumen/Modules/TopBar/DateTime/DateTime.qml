@@ -1,40 +1,30 @@
 
 import QtQuick
+import Quickshell
+import "../../.." as Lumen
 
 Item {
     id: root
 
-    property var theme: null
-    property string timeText: ""
-    property string dateText: ""
+    property string timeText: Qt.formatDateTime(clock.date, "h:mm AP")
+    property string dateText: Qt.formatDateTime(clock.date, "ddd, d MMM")
 
     implicitWidth: clockRow.implicitWidth + 24
     implicitHeight: 34
 
-    function updateClock() {
-        const now = new Date()
-        timeText = Qt.formatDateTime(now, "h:mm AP")
-        dateText = Qt.formatDateTime(now, "ddd, d MMM")
-    }
-
-    Component.onCompleted: updateClock()
-
-    Timer {
-        interval: 1000
-        running: true
-        repeat: true
-        onTriggered: root.updateClock()
+    SystemClock {
+        id: clock
+        precision: SystemClock.Minutes
     }
 
     Rectangle {
         anchors.fill: parent
         radius: height / 2
 
-        color: root.theme
-               ? Qt.rgba(root.theme.surface.r, root.theme.surface.g,
-                 root.theme.surface.b, 0.88) : "#55202020"
+                color: Qt.rgba(Lumen.Theme.surface.r, Lumen.Theme.surface.g,
+                                             Lumen.Theme.surface.b, 0.88)
         border.width: 1
-        border.color: root.theme ? root.theme.outline : "#30ffffff"
+                border.color: Lumen.Theme.outline
     }
 
     Row {
@@ -44,7 +34,7 @@ Item {
 
         Text {
             text: root.timeText
-            color: root.theme ? root.theme.foreground : "#ffffff"
+            color: Lumen.Theme.foreground
             font.pixelSize: 13
             font.weight: Font.DemiBold
             anchors.verticalCenter: parent.verticalCenter
@@ -54,13 +44,13 @@ Item {
             width: 1
             height: 14
             radius: 1
-            color: "#666666"
+            color: Lumen.Theme.outline
             anchors.verticalCenter: parent.verticalCenter
         }
 
         Text {
             text: root.dateText
-            color: root.theme ? root.theme.mutedForeground : "#c0c0c0"
+            color: Lumen.Theme.mutedForeground
             font.pixelSize: 12
             anchors.verticalCenter: parent.verticalCenter
         }

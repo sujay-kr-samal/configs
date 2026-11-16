@@ -3,6 +3,8 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Hyprland
+import Quickshell.Wayland
+import "." as Lumen
 import "Modules/Launcher"
 import "Modules/TopBar/workspace"
 import "Modules/TopBar/DateTime"
@@ -14,59 +16,7 @@ ShellRoot {
 
     property bool launcherVisible: false
     property bool controlCenterVisible: false
-    property alias theme: themeObject
-    property color launcherPrimary: themeObject.primary
-    property color launcherPrimaryContainer: themeObject.primaryContainer
-    property color launcherBackground: themeObject.background
-    property color launcherSurface: themeObject.surface
-    property color launcherSurfaceContainer: themeObject.surfaceContainer
-    property color launcherForeground: themeObject.foreground
-    property color launcherMutedForeground: themeObject.mutedForeground
-    property color launcherOutline: themeObject.outline
-    property string cacheRoot: (Quickshell.env("XDG_CACHE_HOME")
-        || (Quickshell.env("HOME") + "/.cache")) + "/lumen"
-
-    function applyPalette(data) {
-        try {
-            const colors = data.colors
-            themeObject.primary = colors.primary.dark.color
-            themeObject.primaryContainer = colors.primary_container.dark.color
-            themeObject.secondary = colors.secondary.dark.color
-            themeObject.background = colors.background.dark.color
-            themeObject.surface = colors.surface.dark.color
-            themeObject.surfaceContainer = colors.surface_container.dark.color
-            themeObject.foreground = colors.on_surface.dark.color
-            themeObject.mutedForeground = colors.on_surface_variant.dark.color
-            themeObject.outline = colors.outline.dark.color
-        } catch (error) {
-            console.warn("Could not apply Matugen palette:", error)
-        }
-    }
-
-    QtObject {
-        id: themeObject
-        property color primary: "#8ce2bf"
-        property color primaryContainer: "#29483c"
-        property color secondary: "#b0ccc8"
-        property color background: "#0e1514"
-        property color surface: "#151b19"
-        property color surfaceContainer: "#1a2120"
-        property color foreground: "#dde4e2"
-        property color mutedForeground: "#bec9c6"
-        property color outline: "#3f4947"
-    }
-
-    FileView {
-        id: paletteFile
-        path: root.cacheRoot + "/matugen.json"
-        watchChanges: true
-
-        onLoaded: root.applyPalette(JSON.parse(paletteFile.text()))
-        onLoadFailed: function(error) {
-            console.warn("Could not load Matugen palette:", error)
-        }
-    }
-
+    property string controlCenterScreenName: ""
 
     IpcHandler {
         target: "launcher"
@@ -80,7 +30,16 @@ ShellRoot {
         }
 
         function toggleControlCenter() {
-            root.controlCenterVisible = !root.controlCenterVisible
+            if (root.controlCenterVisible) {
+                root.controlCenterVisible = false
+                return
+            }
+
+            if (!Hyprland.focusedMonitor)
+                return
+
+            root.controlCenterScreenName = Hyprland.focusedMonitor.name
+            root.controlCenterVisible = true
         }
 
         function closeControlCenter() {
@@ -91,14 +50,7 @@ ShellRoot {
     LauncherWindow {
         id: launcherWindow
         launcherVisible: root.launcherVisible
-        primaryColor: root.launcherPrimary
-        primaryContainerColor: root.launcherPrimaryContainer
-        backgroundColor: root.launcherBackground
-        surfaceColor: root.launcherSurface
-        surfaceContainerColor: root.launcherSurfaceContainer
-        foregroundColor: root.launcherForeground
-        mutedForegroundColor: root.launcherMutedForeground
-        outlineColor: root.launcherOutline
+        onCloseRequested: root.launcherVisible = false
     }
     Variants {
         model: Quickshell.screens
@@ -119,7 +71,6 @@ ShellRoot {
             color: "transparent"
 
             Workspace {
-                theme: root.theme
                 anchors {
                     left: parent.left
                     leftMargin: 20
@@ -128,12 +79,10 @@ ShellRoot {
             }
 
             DateTime {
-                theme: root.theme
                 anchors.centerIn: parent
             }
 
             Right {
-                theme: root.theme
                 anchors {
                     right: parent.right
                     rightMargin: 20
@@ -141,7 +90,8 @@ ShellRoot {
                 }
 
                 onOpenControlCenter: {
-                    root.controlCenterVisible = !root.controlCenterVisible
+                    root.controlCenterScreenName = modelData.name
+                    root.controlCenterVisible = true
                 }
             }
 
@@ -158,19 +108,59 @@ ShellRoot {
 
                 color: "transparent"
                 visible: root.controlCenterVisible
+                         && modelData.name === root.controlCenterScreenName
                 grabFocus: true
 
-                ControlCenter {
-                    theme: root.theme
-                    anchors.fill: parent
-                    visible: root.controlCenterVisible
+                onVisibleChanged: {
+                    if (!visible && root.controlCenterVisible
+                        && modelData.name === root.controlCenterScreenName) {
+                        root.controlCenterVisible = false
+                    }
+                }
 
-                    onWallpaperApplied: paletteFile.reload()
+                ControlCenter {
+                    anchors.fill: parent
+                    visible: controlPopup.visible
+
+                    onWallpaperApplied: Lumen.Theme.reloadPalette()
 
                     onCloseRequested: {
                         root.controlCenterVisible = false
                     }
                 }
+            }
+        }
+    }
+
+    Variants {
+        model: Quickshell.screens
+
+        PanelWindow {
+            id: notificationWindow
+            required property var modelData
+            screen: modelData
+            visible: !!Hyprland.focusedMonitor
+                     && modelData.name === Hyprland.focusedMonitor.name
+            color: "transparent"
+            mask: notificationInputMask
+            exclusionMode: ExclusionMode.Ignore
+            WlrLayershell.layer: WlrLayer.Overlay
+            WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+            anchors {
+                top: true
+                right: true
+            }
+            implicitWidth: 420
+            implicitHeight: Math.min(notificationRenderer.implicitHeight, 600)
+
+            NotificationPopups {
+                id: notificationRenderer
+                anchors.fill: parent
+            }
+
+            Region {
+                id: notificationInputMask
+                item: notificationRenderer.inputRegionItem
             }
         }
     }
